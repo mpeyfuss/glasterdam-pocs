@@ -1,0 +1,18 @@
+# Compiler files
+cache/
+out/
+
+# Ignores broadcast logs
+broadcast/
+
+# Docs
+docs/
+
+# Dependencies
+dependencies/
+
+# Dotenv file
+.env
+
+# Jetbrains
+.idea/
