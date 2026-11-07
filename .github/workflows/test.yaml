@@ -35,7 +35,7 @@ jobs:
       - name: Run Forge fmt
         id: fmt
         run: |
-          make fmt
+          make fmt-check
 
       - name: Run Forge build
         id: build
@@ -45,4 +45,4 @@ jobs:
       - name: Run Forge tests
         id: test
         run: |
-          make test-quick
+          make test-quick && make reservoir-modes

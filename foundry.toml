@@ -2,13 +2,37 @@
 src = "src"
 out = "out"
 libs = ["dependencies"]
-auto_detect_solc = true
+solc_version = "0.8.37"
+# Glamsterdam = Gloas (CL) + Amsterdam (EL). Setting evm_version to amsterdam both
+# compiles for it and makes forge's test EVM execute Amsterdam rules.
+evm_version = "amsterdam"
+# solc only allows the amsterdam target with --experimental (0.8.35+).
+experimental = true
+# Mainnet-realistic gas split. With the EIP-7825 cap enabled, Amsterdam caps
+# *regular* gas at 2^24 and everything above it in the tx gas limit becomes the
+# EIP-8037 state gas reservoir (here: 2^30 - 2^24). With the cap disabled (forge's
+# default), there is no reservoir and state gas is billed to regular gas instead.
+enable_tx_gas_limit = true
+gas_limit = 1073741824 # 2^30
+# forge 1.9.0 bug: any cheatcode call wipes the rest of the tx's state gas reservoir.
+# Dynamic test linking compiles `new X()` in tests into the `vm.deployCode` cheatcode,
+# so it must be off or every deploy in a test silently disables the reservoir.
+dynamic_test_linking = false
 optimizer = true
 optimizer_runs = 10000
 verbosity = 3
 gas_reports = []
 show_progress = true
 fs_permissions = [{ access = "read-write", path = "./.temp"}]
+
+# Pre-fork baseline for diffing behavior against Glamsterdam: `make test-baseline`.
+[profile.osaka]
+evm_version = "osaka"
+experimental = false
+gas_limit = 16777216 # 2^24: Osaka rejects tx gas limits above the EIP-7825 cap
+
+[profile.ci]
+verbosity = 4
 
 [fuzz]
 runs = 1024
