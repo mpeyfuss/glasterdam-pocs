@@ -15,6 +15,11 @@ above the EIP-7825 execution cap of `2^24`, the excess becomes a transaction-wid
 reservoir. A refund receiver can create persistent state using that reservoir while consuming
 only the execution component from its capped call.
 
+The strongest demonstrated amplifier is code deposit. The same callback can deploy 24 KiB of
+runtime code and bill 37,784,880 state gas for the new account and code to the outbidder. A
+receiver can also deplete a small reservoir without reverting and make a later independently
+capped state-writing call fail.
+
 The demonstrated impact is conditional economic griefing, not an unconditional auction denial
 of service. It is most relevant when an auction call is made inside a high-gas smart-account,
 relayer, or batch transaction. Ordinary direct bids are normally far below `2^24` and therefore
@@ -70,6 +75,7 @@ Observed receiver behavior:
 | Create two fresh slots | Push fails; pull credited | Push succeeds | Push succeeds |
 | Greedily create fresh slots | Push fails and writes roll back | Push fails and reservoir is restored | Push succeeds with seven persistent slots |
 | Adaptively create fresh slots | Push succeeds with no new slots | Push succeeds with two slots and depletes the small reservoir | Push succeeds with five slots |
+| Deploy 24 KiB runtime code | Push fails and deployment rolls back | Push fails and reservoir is restored | Push succeeds; 37,784,880 state gas for account + code |
 
 A fresh storage write measured approximately 12,112 execution gas plus 97,920 state gas. With no
 reservoir, the combined approximately 110,032 gas cannot fit in the refund call. With a reservoir,
@@ -77,7 +83,13 @@ the execution component fits and the state component is paid by the outbidder's 
 
 The adaptive receiver also changed the outbidder's next fresh storage write from approximately
 12,112 execution gas to 83,088 execution gas by depleting the small reservoir. The write still
-succeeded; the current PoC demonstrates gas displacement, not a complete transaction OOG.
+succeeded when it was not independently capped.
+
+A separate batch test gives the downstream write a 30,000 execution-gas allowance. With a benign
+refund receiver, the fresh SSTORE succeeds because the intact reservoir pays its state gas. With
+the adaptive receiver, the callback first consumes two slots' worth of reservoir and the exact
+same downstream call OOGs. The batch catches that failure so the test can inspect it; a batch that
+requires every action to succeed would revert the full transaction.
 
 ## Security assessment
 
@@ -101,20 +113,21 @@ revert.
 
 In a reservoir-bearing transaction, the requested 100,000 gas allowance bounds execution but not
 total sender-paid gas. The SSTORE receivers persisted roughly 0.5 to 0.8 million state gas in the
-large-reservoir tests. This cost is borne by the outbidder even though the created state belongs
-to the refund receiver.
+large-reservoir tests. The code-deposit receiver is more severe: its six-byte initcode returns
+24,576 zero bytes as runtime code, charging 37,601,280 code-deposit state gas plus 183,600 new-
+account state gas. It completes inside the callback's roughly 102,300 execution-gas budget.
 
-The SSTORE result proves that economic griefing is possible but does not establish a worst-case
-upper bound. EIP-8037 also moves new-account and code-deposit costs into the state-gas dimension.
-Contract creation and code deposit may have a higher state-gas-to-execution-gas ratio and require
-separate measurement before the maximum exposure can be stated.
+This cost is borne by the outbidder even though the created account and code belong to the refund
+receiver. The 37.8M result is not a worst-case upper bound; larger code, multiple creations, and
+new-account sprays remain to be bounded.
 
 ### Full transaction reversion is conditional
 
-Reservoir depletion can make later state creation spill into execution gas. A complete transaction
-can OOG if it performs state creation after the refund and has insufficient execution gas for that
-spill. This condition is plausible in a near-limit batch or smart-account transaction, but it is
-not demonstrated by the current direct-auction tests.
+Reservoir depletion can make later state creation spill into execution gas. The PoC now
+demonstrates failure of a later 30,000-gas subcall whose fresh SSTORE succeeds with an intact
+reservoir. A complete transaction can OOG or revert if the enclosing batch requires that subcall
+to succeed. The current test catches the subcall failure so it can compare both outcomes; it does
+not present a reverted top-level transaction as inspectable evidence.
 
 The auction's own successful-push path performs no fresh state creation after the external call;
 it only emits an event. A direct EOA bid therefore has no demonstrated reservoir-induced OOG path
@@ -148,7 +161,7 @@ The test suite contains workarounds for known Foundry behavior that can clear th
 a cheatcode call. EIP-8037 was in Last Call rather than Final status at the time of review, so gas
 constants and client behavior should be revalidated against the finalized fork implementation.
 
-The PoC covers event emission, an existing-slot update, fresh SSTOREs, revert rollback, and
-adaptive reservoir depletion. It does not yet measure contract creation, code deposit, account
-creation, ERC-4337 integration, or a full top-level transaction OOG caused by downstream state
-creation.
+The PoC covers event emission, an existing-slot update, fresh SSTOREs, revert rollback, adaptive
+reservoir depletion, a downstream capped-call failure, and CREATE with 24 KiB of code deposit. It
+does not yet measure a pure new-account spray, integrate a production ERC-4337 EntryPoint, bound
+maximum CREATE amplification, or replay the behavior against historical mainnet transactions.

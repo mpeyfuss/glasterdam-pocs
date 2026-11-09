@@ -110,3 +110,31 @@ contract AdaptiveDrainer is Bidder {
         return _slotsPlusOne - 1;
     }
 }
+
+/// @notice Griefer: uses a small amount of execution gas to deposit 24 KiB of runtime code.
+/// @dev The initcode returns zero-filled memory as runtime bytecode. EIP-8037 charges code
+///      deposit to state gas at CPSB (1,530 gas/byte), while the callback's requested gas
+///      limits only execution. `_deployed` starts nonzero so recording the created address
+///      overwrites existing state rather than creating another slot.
+contract CodeDepositDrainer is Bidder {
+    uint256 internal constant RUNTIME_SIZE = 24_576;
+
+    address internal _deployed = address(1);
+
+    receive() external payable {
+        if (_withdrawing) return;
+
+        address created;
+        assembly ("memory-safe") {
+            // PUSH2 0x6000; PUSH1 0; RETURN => 24 KiB of zero-filled runtime code.
+            mstore(0, hex"6160006000f30000000000000000000000000000000000000000000000000000")
+            created := create(0, 0, 6)
+        }
+        require(created != address(0));
+        _deployed = created;
+    }
+
+    function deployed() external view returns (address) {
+        return _deployed;
+    }
+}

@@ -10,7 +10,8 @@ import {
     OverwriteReceiver,
     FreshStateReceiver,
     GreedyDrainer,
-    AdaptiveDrainer
+    AdaptiveDrainer,
+    CodeDepositDrainer
 } from "../../src/reservoir-griefing/Receivers.sol";
 
 /// @notice The honest outbidding bidder. Bids, then does one more piece of state
@@ -237,6 +238,46 @@ contract AdaptiveDrainerTest is AuctionScenarioTest {
         console.log("griefer new slots billed to bidder's reservoir:", slots);
         assertGe(slots, 5);
         // regular-gas budget, not reservoir, was the binding limit
+        assertLe(postBidFresh, STATE_GAS_FROM_RESERVOIR_MAX);
+    }
+}
+
+/// @dev Code deposit has a much larger state-to-execution gas ratio than SSTORE. A 24 KiB
+///      deployment consumes 37,601,280 state gas for code alone while fitting inside the
+///      refund callback's roughly 102,300 execution-gas budget.
+contract CodeDepositDrainerTest is AuctionScenarioTest {
+    uint256 internal constant RUNTIME_SIZE = 24_576;
+
+    function _deployReceiver() internal override returns (address payable) {
+        return payable(address(new CodeDepositDrainer()));
+    }
+
+    function test_NoReservoir_DeploymentOOGs_PullRequired() public inMode(NONE) {
+        (bool pushed,) = _outbid();
+
+        assertFalse(pushed);
+        assertEq(CodeDepositDrainer(receiver).deployed(), address(1));
+        _assertPullPaymentWorks();
+    }
+
+    function test_SmallReservoir_DeploymentOOGs_ReservoirRefunded() public inMode(SMALL) {
+        (bool pushed, uint256 postBidFresh) = _outbid();
+
+        assertFalse(pushed);
+        assertEq(CodeDepositDrainer(receiver).deployed(), address(1));
+        assertLe(postBidFresh, STATE_GAS_FROM_RESERVOIR_MAX);
+        _assertPullPaymentWorks();
+    }
+
+    function test_LargeReservoir_Deploys24KiBOnBiddersDime() public inMode(LARGE) {
+        (bool pushed, uint256 postBidFresh) = _outbid();
+        address deployed = CodeDepositDrainer(receiver).deployed();
+
+        console.log("deployed runtime bytes billed to bidder's reservoir:", deployed.code.length);
+        console.log("code-deposit state gas:", RUNTIME_SIZE * 1_530);
+
+        assertTrue(pushed);
+        assertEq(deployed.code.length, RUNTIME_SIZE);
         assertLe(postBidFresh, STATE_GAS_FROM_RESERVOIR_MAX);
     }
 }

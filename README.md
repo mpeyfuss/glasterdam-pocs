@@ -52,6 +52,8 @@ reservoir first. When the reservoir runs out, the rest **spills into regular gas
 
 What we've observed (forge 1.9.0 / revm):
 - `gasleft()` only shows regular gas.
+- `gasleft()` is not monotonic: a state-gas refill can make it increase, so checked
+  `startGas - gasleft()` accounting can panic.
 - A call's gas limit (`call{gas: X}`) only bounds the callee's *regular* gas. The callee draws
   state gas from the shared tx-wide reservoir.
 - A value-bearing `call{gas: 100_000}` was observed with a maximum callee budget of 102,300
@@ -93,6 +95,9 @@ other modes show as skipped.
 
 ## PoCs
 
+The running hypothesis matrix and next research targets are in
+[EIP-8037 contract footgun discovery notes](reports/discovery-notes.md).
+
 ### `reservoir-griefing`
 
 An auction refunds the outbid bidder with an optimistic push (`call{gas: 100_000}`) and falls
@@ -106,6 +111,7 @@ slot in the same transaction.
 | `FreshStateReceiver`: creates 2 slots | pull (first fresh write OOGs) | push ✅, bidder's next slot spills (83k) | push ✅ |
 | `GreedyDrainer`: creates slots until out of gas | pull | pull (reservoir refunded) | push ✅, **7 junk slots billed to bidder** |
 | `AdaptiveDrainer`: creates slots while they fit in the reservoir | push ✅, 0 slots | push ✅, **2 slots, reservoir drained, bidder's next slot spills (83k)** | push ✅, **5 junk slots billed to bidder** |
+| `CodeDepositDrainer`: deploys 24 KiB runtime | pull | pull (reservoir refunded) | push ✅, **37.8M state gas billed to bidder** |
 
 The full analysis is in [Reservoir griefing in optimistic auction refunds](reports/reservoir-griefing.md).
 
@@ -119,6 +125,23 @@ Takeaways:
   worst-case upper bound.
 - A receiver can drain the reservoir *without reverting* (`AdaptiveDrainer`), so the payer's own
   later state growth spills into regular gas.
+- Reservoir displacement can break composability: a later 30k-execution-gas fresh SSTORE
+  succeeds after a benign callback but fails after the adaptive callback drains the reservoir.
+- Code deposit is a much stronger amplifier than SSTORE: the 100k-execution-gas refund callback
+  successfully deploys 24 KiB and charges 37,784,880 state gas (account plus code) to the bidder.
 - The push-to-pull fallback still preserves auction liveness when the transaction has enough gas.
   The demonstrated reservoir impact is economic griefing and downstream gas displacement, not
   an unconditional ability to block an outbid.
+
+### `gasleft-metering`
+
+EIP-8037 makes `gasleft()`-delta accounting unsafe in both reservoir modes:
+
+| transaction mode | observed behavior |
+| --- | --- |
+| no reservoir | clearing temporary state in a child frame increases parent `gasleft()` by 97,164; checked subtraction panics |
+| reservoir present | a fresh SSTORE is metered as 12,113 execution gas while 97,920 state gas is omitted |
+
+The same `checkedMeterAcrossCall()` calldata therefore reverts when `tx.gas <= 2^24` and succeeds
+with a reservoir, where it reports only 756 gas. See
+[Non-monotonic and incomplete gasleft metering](reports/gasleft-metering.md).
